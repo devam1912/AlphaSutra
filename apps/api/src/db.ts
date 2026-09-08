@@ -1,4 +1,5 @@
 import { MongoClient, type ClientSession, type Db } from 'mongodb';
+import { tradingIndexes } from './trading/store.js';
 import type { Audit, Idempotency, LedgerEntry, Portfolio, Session, User } from './models.js';
 
 export function collections(db: Db) {
@@ -59,6 +60,7 @@ export class Database {
 
 export async function migrate(database: Database) {
   const c = database.c;
+  await tradingIndexes(database);
   await c.users.createIndex({ email: 1 }, { unique: true });
   await c.sessions.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
   await c.sessions.createIndex({ userId: 1 });

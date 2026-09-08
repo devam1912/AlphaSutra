@@ -1,3 +1,7 @@
+import { trading } from '../apps/api/src/trading/store.js';
+import { submitOrder, fillOrder } from '../apps/api/src/trading/orders.js';
+import { closePosition } from '../apps/api/src/trading/exits.js';
+import { initialPortfolio, indiaDay } from '../apps/api/src/wallet.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import request from 'supertest';
@@ -63,5 +67,72 @@ suite('real MongoDB replica-set accounting', () => {
     expect(ledger.every((row: { userId: string }) => row.userId === alicePortfolio.userId)).toBe(
       true,
     );
+  });
+  it('fills once, accounts for costs, and closes without leaking reservations', async () => {
+    const t = trading(db);
+    const owner = 'execution-test';
+    await db.c.portfolios.insertOne(initialPortfolio(owner));
+    await t.sessions.insertOne({
+      _id: indiaDay(new Date()),
+      open: new Date(Date.now() - 60000),
+      close: new Date(Date.now() + 3600000),
+      source: 'test-fixture',
+    });
+    await t.instruments.insertOne({
+      _id: 'TEST',
+      symbol: 'TEST',
+      exchange: 'NSE',
+      kind: 'EQUITY',
+      sector: 'IT',
+      correlationGroup: 'TECH',
+      lotSize: 1,
+      tickSize: 5,
+      active: true,
+      providerKey: 'test',
+    });
+    const quote = {
+      _id: 'TEST',
+      bid: 9950,
+      ask: 9960,
+      last: 9955,
+      asOf: new Date(),
+      availableQuantity: 100,
+      quality: 'verified' as const,
+      source: 'test-fixture',
+    };
+    await t.quotes.insertOne(quote);
+    const input = {
+      instrumentId: 'TEST',
+      quantity: 10,
+      type: 'MARKET' as const,
+      maxPrice: 10000,
+      stop: 9500,
+      target1: 11000,
+      target2: 11500,
+    };
+    const order = await submitOrder(db, owner, input, 'unique-order');
+    expect(order.status).toBe('OPEN');
+    expect(await submitOrder(db, owner, input, 'unique-order')).toEqual(order);
+    await t.quotes.updateOne({ _id: 'TEST' }, { $set: { asOf: new Date() } });
+    await Promise.all([
+      fillOrder(db, owner, String(order.orderId)),
+      fillOrder(db, owner, String(order.orderId)),
+    ]);
+    const position = await t.positions.findOne({ userId: owner });
+    expect(position?.quantity).toBe(10);
+    expect((await getPortfolio(db, owner)).blocked).toBe(0);
+    expect(await t.positions.countDocuments({ userId: 'different-owner' })).toBe(0);
+    await t.quotes.updateOne(
+      { _id: 'TEST' },
+      { $set: { asOf: new Date(), bid: 11000, ask: 11005, availableQuantity: 100 } },
+    );
+    await closePosition(db, owner, position!._id);
+    await closePosition(db, owner, position!._id);
+    const trade = await t.trades.findOne({ userId: owner });
+    const portfolio = await getPortfolio(db, owner);
+    expect(portfolio.cash).toBe(100_000_000 + trade!.pnl);
+    expect(portfolio.realizedPnl).toBe(trade!.pnl);
+    expect(portfolio.equity).toBe(0);
+    expect(await t.trades.countDocuments({ userId: owner })).toBe(1);
   });
 });

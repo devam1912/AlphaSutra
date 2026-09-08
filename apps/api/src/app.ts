@@ -12,6 +12,7 @@ import { DomainError } from './errors.js';
 import { authRoutes } from './auth.js';
 import { authenticate, identity, protectOrigin, requireOwner } from './security.js';
 import { audit, getPortfolio, transfer } from './wallet.js';
+import { tradingRoutes } from './trading/routes.js';
 import { MAX_MONEY } from './money.js';
 
 export const logger = pino({
@@ -111,6 +112,7 @@ export function createApp(database: Database, config: Config) {
     });
     res.json(input);
   });
+  api.use(tradingRoutes(database));
   app.use('/api/v1', api);
   app.use((_req, _res, next) => next(new DomainError('NOT_FOUND', 'Route not found', 404)));
   const handler: ErrorRequestHandler = (error: unknown, _req, res, _next) => {
@@ -119,32 +121,26 @@ export function createApp(database: Database, config: Config) {
         .status(error.status)
         .json({ code: error.code, message: error.message, requestId: res.locals.requestId });
     } else if (error instanceof ZodError) {
-      res
-        .status(400)
-        .json({
-          code: 'INVALID_INPUT',
-          message: 'Invalid request',
-          fields: error.flatten().fieldErrors,
-        });
+      res.status(400).json({
+        code: 'INVALID_INPUT',
+        message: 'Invalid request',
+        fields: error.flatten().fieldErrors,
+      });
     } else if (error instanceof MongoServerError && error.code === 11000) {
-      res
-        .status(409)
-        .json({
-          code: 'CONFLICT',
-          message: 'Record already exists; retry the original request if applicable',
-        });
+      res.status(409).json({
+        code: 'CONFLICT',
+        message: 'Record already exists; retry the original request if applicable',
+      });
     } else {
       logger.error(
         { requestId: res.locals.requestId, type: error instanceof Error ? error.name : 'unknown' },
         'request failed',
       );
-      res
-        .status(500)
-        .json({
-          code: 'INTERNAL_ERROR',
-          message: 'Request failed',
-          requestId: res.locals.requestId,
-        });
+      res.status(500).json({
+        code: 'INTERNAL_ERROR',
+        message: 'Request failed',
+        requestId: res.locals.requestId,
+      });
     }
   };
   app.use(handler);
