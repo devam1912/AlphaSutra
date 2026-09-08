@@ -1,0 +1,7 @@
+package-lock.json
+.venv
+.cache
+data
+artifacts
+dist
+coverage
