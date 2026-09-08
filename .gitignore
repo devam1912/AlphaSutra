@@ -13,7 +13,7 @@ __pycache__/
 *.pyc
 *.log
 *.tsbuildinfo
-data/
+/data/
 artifacts/
 *.joblib
 *.parquet

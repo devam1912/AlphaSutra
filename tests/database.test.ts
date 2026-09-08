@@ -1,3 +1,4 @@
+import { storeQuotes, ingestCandles } from '../apps/api/src/data/market.js';
 import { trading } from '../apps/api/src/trading/store.js';
 import { submitOrder, fillOrder } from '../apps/api/src/trading/orders.js';
 import { closePosition } from '../apps/api/src/trading/exits.js';
@@ -134,5 +135,36 @@ suite('real MongoDB replica-set accounting', () => {
     expect(portfolio.realizedPnl).toBe(trade!.pnl);
     expect(portfolio.equity).toBe(0);
     expect(await t.trades.countDocuments({ userId: owner })).toBe(1);
+  });
+  it('does not replenish quote depth or rewrite historical candles on retries', async () => {
+    const t = trading(db);
+    const q = {
+      _id: 'DEPTH',
+      bid: 10000,
+      ask: 10005,
+      last: 10000,
+      availableQuantity: 100,
+      asOf: new Date(),
+      source: 'test',
+      quality: 'verified' as const,
+    };
+    await storeQuotes(db, [q]);
+    await t.quotes.updateOne({ _id: 'DEPTH' }, { $set: { availableQuantity: 1 } });
+    await storeQuotes(db, [q]);
+    expect((await t.quotes.findOne({ _id: 'DEPTH' }))?.availableQuantity).toBe(1);
+    const candle = {
+      timestamp: new Date('2025-01-01T10:00:00Z'),
+      open: 100,
+      high: 110,
+      low: 90,
+      close: 105,
+      volume: 100,
+      adjusted: true,
+    };
+    await ingestCandles(db, 'DEPTH', [candle], 'test');
+    await ingestCandles(db, 'DEPTH', [{ ...candle, close: 104 }], 'test');
+    const stored = await db.db.collection('candles').findOne({ instrumentId: 'DEPTH' });
+    expect(stored?.close).toBe(105);
+    await expect(ingestCandles(db, 'DEPTH', [candle, candle], 'test')).rejects.toThrow('Duplicate');
   });
 });
