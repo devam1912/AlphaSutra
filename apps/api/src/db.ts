@@ -1,4 +1,5 @@
 import { MongoClient, type ClientSession, type Db } from 'mongodb';
+import { researchIndexes } from './research/routes.js';
 import { dataIndexes } from './data/routes.js';
 import { tradingIndexes } from './trading/store.js';
 import type { Audit, Idempotency, LedgerEntry, Portfolio, Session, User } from './models.js';
@@ -40,7 +41,7 @@ export class Database {
   async ready() {
     const hello = await this.db.admin().command({ hello: 1 });
     if (!hello.setName) throw new Error('MongoDB replica set is required for transactions');
-    if (!(await this.db.collection('migrations').findOne({ version: 1 }))) {
+    if (!(await this.db.collection('migrations').findOne({ version: 2 }))) {
       throw new Error('Database migrations have not been applied');
     }
   }
@@ -63,6 +64,7 @@ export async function migrate(database: Database) {
   const c = database.c;
   await tradingIndexes(database);
   await dataIndexes(database);
+  await researchIndexes(database);
   await c.users.createIndex({ email: 1 }, { unique: true });
   await c.sessions.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
   await c.sessions.createIndex({ userId: 1 });
@@ -74,5 +76,5 @@ export async function migrate(database: Database) {
   // Idempotency records deliberately have no TTL: an old retry must not move cash twice.
   await database.db
     .collection('migrations')
-    .updateOne({ version: 1 }, { $setOnInsert: { appliedAt: new Date() } }, { upsert: true });
+    .updateOne({ version: 2 }, { $setOnInsert: { appliedAt: new Date() } }, { upsert: true });
 }

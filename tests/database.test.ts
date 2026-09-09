@@ -167,4 +167,38 @@ suite('real MongoDB replica-set accounting', () => {
     expect(stored?.close).toBe(105);
     await expect(ingestCandles(db, 'DEPTH', [candle, candle], 'test')).rejects.toThrow('Duplicate');
   });
+  it('queues tenant-owned research durably and rejects foreign models', async () => {
+    const app = createApp(db, readConfig({ NODE_ENV: 'test' }));
+    const agent = request.agent(app);
+    const input = { email: 'research@example.test', password: 'a-long-test-password' };
+    await agent.post('/api/v1/auth/register').set('Origin', origin).send(input);
+    await agent.post('/api/v1/auth/login').set('Origin', origin).send(input);
+    const key = '00000000-0000-4000-8000-000000000001';
+    const submit = () =>
+      agent
+        .post('/api/v1/jobs')
+        .set('Origin', origin)
+        .set('Idempotency-Key', key)
+        .send({ kind: 'history', instrumentId: 'TEST' });
+    const first = await submit();
+    expect(first.status).toBe(202);
+    expect((await submit()).body.jobId).toBe(first.body.jobId);
+    const jobs = (await agent.get('/api/v1/jobs')).body.items;
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].state).toBe('QUEUED');
+    const forbidden = await agent
+      .post('/api/v1/jobs')
+      .set('Origin', origin)
+      .set('Idempotency-Key', '00000000-0000-4000-8000-000000000002')
+      .send({
+        kind: 'score',
+        instrumentId: 'TEST',
+        modelId: '00000000-0000-4000-8000-000000000099',
+      });
+    expect(forbidden.status).toBe(400);
+    expect(forbidden.body.code).toBe('UNKNOWN_MODEL');
+    expect((await agent.get('/api/v1/models')).body.items).toHaveLength(0);
+    expect((await agent.get('/api/v1/summary')).body.value).toBe(100_000_000);
+    expect((await agent.get('/api/v1/high-conviction')).body.status).toBe('NO_TRADE');
+  });
 });

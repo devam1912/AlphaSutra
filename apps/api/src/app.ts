@@ -14,6 +14,7 @@ import { authenticate, identity, protectOrigin, requireOwner } from './security.
 import { audit, getPortfolio, transfer } from './wallet.js';
 import { tradingRoutes } from './trading/routes.js';
 import { dataRoutes } from './data/routes.js';
+import { researchRoutes } from './research/routes.js';
 import { MAX_MONEY } from './money.js';
 
 export const logger = pino({
@@ -115,6 +116,7 @@ export function createApp(database: Database, config: Config) {
   });
   api.use(tradingRoutes(database));
   api.use(dataRoutes(database));
+  api.use(researchRoutes(database));
   app.use('/api/v1', api);
   app.use((_req, _res, next) => next(new DomainError('NOT_FOUND', 'Route not found', 404)));
   const handler: ErrorRequestHandler = (error: unknown, _req, res, _next) => {

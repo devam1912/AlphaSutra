@@ -7,8 +7,8 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from quant.features import regime
-from quant.registry import checked_id, load
-from quant.training import infer
+from quant.registry import checked_id, load, save
+from quant.training import infer, train
 
 app = FastAPI(title="AlphaSutra Quant", version="0.1.0")
 ARTIFACT_ROOT = Path(os.environ.get("ARTIFACT_ROOT", "artifacts"))
@@ -46,6 +46,9 @@ def score(request: ScoreRequest):
     try:
         model, report = load(ARTIFACT_ROOT, checked_id(request.model_id))
         frame = pd.DataFrame([c.model_dump() for c in request.candles])
+        available = pd.to_datetime(frame.timestamp, utc=True).max()
+        if available <= pd.Timestamp(report["calibration_end"]):
+            raise ValueError("Inference data predates model calibration")
         return {
             **infer(model, frame),
             "model_id": request.model_id,
@@ -56,3 +59,22 @@ def score(request: ScoreRequest):
         }
     except (ValueError, FileNotFoundError) as error:
         raise HTTPException(422, "Model unavailable or candle data invalid") from error
+
+
+class TrainRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    candles: list[Candle] = Field(min_length=550, max_length=5000)
+    kind: str = Field(pattern="^(logistic|boosting)$", default="logistic")
+
+
+@app.post("/train", dependencies=[Depends(authorize)])
+def train_job(request: TrainRequest):
+    # Called only by the private background worker, never a browser request.
+    try:
+        model, report = train(
+            pd.DataFrame([c.model_dump() for c in request.candles]), kind=request.kind
+        )
+        stored = save(ARTIFACT_ROOT, model, report)
+        return {"model_id": stored["model_id"], "report": stored}
+    except ValueError as error:
+        raise HTTPException(422, "Training data does not meet validation requirements") from error
