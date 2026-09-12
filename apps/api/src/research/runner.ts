@@ -75,17 +75,15 @@ export async function runResearchJob(db: Database, id: string) {
           const result = z
             .object({ model_id: z.string().uuid(), report: z.record(z.unknown()) })
             .parse(await quantRequest('/train', { candles, kind: job.baseline }));
-          await db.db
-            .collection<ModelRecord>('models')
-            .insertOne({
-              _id: result.model_id,
-              userId: job.userId,
-              instrumentId: instrument._id,
-              jobId: id,
-              status: 'CHALLENGER',
-              report: result.report,
-              createdAt: new Date(),
-            });
+          await db.db.collection<ModelRecord>('models').insertOne({
+            _id: result.model_id,
+            userId: job.userId,
+            instrumentId: instrument._id,
+            jobId: id,
+            status: 'CHALLENGER',
+            report: result.report,
+            createdAt: new Date(),
+          });
           resultId = result.model_id;
         }
       } else {

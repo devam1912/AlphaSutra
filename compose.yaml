@@ -1,0 +1,126 @@
+# Local evaluation only. See docs/deployment.md before an external deployment.
+name: alphasutra
+x-api: &api
+  build:
+    context: .
+    dockerfile: deploy/node.Dockerfile
+  env_file: .env
+  environment: &environment
+    NODE_ENV: development
+    APP_ORIGIN: http://localhost:8080
+    MONGO_URL: mongodb://mongo:27017/alphasutra?replicaSet=rs0
+    REDIS_URL: redis://redis:6379
+    ML_URL: http://quant:8000
+    ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:?Run node scripts/init-env.mjs first}
+  init: true
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  stop_grace_period: 30s
+  restart: unless-stopped
+
+services:
+  mongo:
+    image: mongo:8.0
+    command: [mongod, --replSet, rs0, --bind_ip_all]
+    volumes: [mongo-data:/data/db]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, mongosh, --quiet, --eval, 'quit(db.adminCommand({ping:1}).ok ? 0 : 1)']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  mongo-init:
+    image: mongo:8.0
+    depends_on:
+      mongo: { condition: service_healthy }
+    volumes: ['./deploy/init-replica.js:/init-replica.js:ro']
+    entrypoint: [mongosh, 'mongodb://mongo:27017/admin', --quiet, /init-replica.js]
+    restart: 'no'
+  redis:
+    image: redis:7.4-alpine
+    command: [redis-server, --appendonly, 'yes', --maxmemory-policy, noeviction]
+    volumes: [redis-data:/data]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  migrate:
+    <<: *api
+    command: [node, apps/api/dist/migrate.js]
+    restart: 'no'
+    depends_on:
+      mongo-init: { condition: service_completed_successfully }
+  api:
+    <<: *api
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:4000/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 6s
+      retries: 5
+  worker:
+    <<: *api
+    command: [node, apps/api/dist/worker.js]
+    healthcheck:
+      test: [CMD, node, apps/api/dist/worker-health.js]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      quant: { condition: service_healthy }
+  quant:
+    build:
+      context: .
+      dockerfile: deploy/quant.Dockerfile
+    environment:
+      ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:?Run node scripts/init-env.mjs first}
+    volumes: [quant-artifacts:/artifacts]
+    init: true
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          CMD,
+          python,
+          -c,
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+  web:
+    build:
+      context: .
+      dockerfile: deploy/web.Dockerfile
+    ports: ['127.0.0.1:8080:8080']
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, wget, -q, --spider, 'http://127.0.0.1:8080/ready']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mongo-data:
+  redis-data:
+  quant-artifacts:

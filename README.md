@@ -26,8 +26,10 @@ queries. A standalone MongoDB server is deliberately unsupported.
 ## Development
 
 Requires Node 22+, Python 3.12+, MongoDB 7+ replica set and Redis 7+.
-Copy `.env.example` to `.env`, install with `npm ci`, run
-`npm run migrate -w @alphasutra/api`, then `npm run dev`.
+For the complete local stack, run `node scripts/init-env.mjs` followed by
+`docker compose up --build --wait --wait-timeout 180`. Open http://localhost:8080.
+See [deployment and operations](docs/deployment.md) for host development,
+service configuration, backups and external deployment requirements.
 The API starts only after migrations and replica-set readiness succeed.
 All API mutation requests require an `Origin` matching `APP_ORIGIN`.
 
